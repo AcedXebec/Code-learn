@@ -141,4 +141,6 @@ A trading journal is the single highest-ROI habit you can build. Minimum fields 
 
 After 50 trades, sort by setup # and look at the expectancy of each. After 100 trades, sort by mistake type. The patterns are usually obvious in retrospect — and *that* is the journal's value.
 
+A copy-paste-ready blank journal entry is provided at [`../examples/journal-template.md`](../examples/journal-template.md).
+
 → Continue to [`10-tradingview-walkthrough.md`](10-tradingview-walkthrough.md).
