@@ -1,0 +1,412 @@
+//@version=5
+// =============================================================================
+//  PA + SMC/ICT Hybrid Indicator
+//  Repo: https://github.com/<your-fork>/Code-learn  (MIT)
+//
+//  Implements the building blocks taught in guide/02-smc-core.md and
+//  guide/03-ict-essentials.md:
+//
+//    - Swing pivots (HH / HL / LH / LL)
+//    - Break of Structure (BOS) and Change of Character (CHoCH)
+//    - Bullish / Bearish Order Blocks (boxes)
+//    - Fair Value Gaps (boxes) with mitigation tracking
+//    - Equal highs / lows (liquidity pools)
+//    - Liquidity sweep markers (BSL / SSL)
+//    - Breaker block recoloring (failed OBs)
+//    - Asia / London / NY session shading
+//    - Kill zones (London KZ, NY AM KZ, NY PM KZ)
+//    - Silver Bullet windows (3 ICT defaults)
+//    - Premium / discount + OTE band on the active range
+//    - alertcondition() calls per setup
+//
+//  Read guide/04-hybrid-framework.md to understand HOW to use these.
+// =============================================================================
+
+indicator("PA + SMC/ICT Hybrid", shorttitle="PA SMC ICT", overlay=true,
+     max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ------------------------------------ INPUTS ---------------------------------
+
+grpStr  = "Structure"
+pivLeft  = input.int(5,    "Pivot left bars",  minval=1, maxval=50, group=grpStr)
+pivRight = input.int(5,    "Pivot right bars", minval=1, maxval=50, group=grpStr)
+showHHLL = input.bool(true,"Show HH/HL/LH/LL labels",                group=grpStr)
+showBOS  = input.bool(true,"Show BOS / CHoCH lines",                 group=grpStr)
+
+grpOB   = "Order Blocks"
+showOB    = input.bool(true, "Show order blocks",         group=grpOB)
+maxOBs    = input.int(8,     "Max OBs kept", minval=1,    group=grpOB)
+obBullCol = input.color(color.new(color.green, 80), "Bullish OB",        group=grpOB)
+obBearCol = input.color(color.new(color.red,   80), "Bearish OB",        group=grpOB)
+brkCol    = input.color(color.new(color.orange,75), "Breaker block",     group=grpOB)
+
+grpFVG  = "Fair Value Gaps"
+showFVG     = input.bool(true,  "Show FVGs",         group=grpFVG)
+maxFVGs     = input.int(6,      "Max FVGs kept",     group=grpFVG, minval=1)
+fvgMinPct   = input.float(0.30, "Min FVG size (× ATR14)", group=grpFVG, step=0.05, minval=0.0)
+fvgBullCol  = input.color(color.new(color.lime,    80), "Bullish FVG",   group=grpFVG)
+fvgBearCol  = input.color(color.new(color.fuchsia, 80), "Bearish FVG",   group=grpFVG)
+
+grpLiq  = "Liquidity"
+showEQ        = input.bool(true,  "Show equal highs / equal lows",  group=grpLiq)
+eqTolPips     = input.float(3.0,  "EQ tolerance (pips)", group=grpLiq, step=0.5, minval=0.0)
+showSweeps    = input.bool(true,  "Mark liquidity sweeps", group=grpLiq)
+showPdhPdl    = input.bool(true,  "Show PDH / PDL lines",  group=grpLiq)
+
+grpSess = "Sessions & Kill Zones"
+showAsia    = input.bool(true, "Asia session bg",      group=grpSess)
+showLondon  = input.bool(true, "London session bg",    group=grpSess)
+showNY      = input.bool(true, "NY session bg",        group=grpSess)
+showKZ      = input.bool(true, "Kill zone bg (London / NY AM / NY PM)", group=grpSess)
+showSB      = input.bool(true, "Silver Bullet windows",                 group=grpSess)
+asiaSess    = input.session("1900-0300", "Asia session",     group=grpSess)
+londonSess  = input.session("0200-1100", "London session",   group=grpSess)
+nySess      = input.session("0700-1600", "NY session",       group=grpSess)
+londonKZ    = input.session("0200-0500", "London kill zone", group=grpSess)
+nyAmKZ      = input.session("0700-1000", "NY AM kill zone",  group=grpSess)
+nyPmKZ      = input.session("1330-1600", "NY PM kill zone",  group=grpSess)
+londonSB    = input.session("0300-0400", "London Silver Bullet",  group=grpSess)
+nyAmSB      = input.session("1000-1100", "NY AM Silver Bullet",   group=grpSess)
+nyPmSB      = input.session("1400-1500", "NY PM Silver Bullet",   group=grpSess)
+sessTz      = input.string("America/New_York", "Session timezone", options=["America/New_York","Europe/London","UTC","Asia/Tokyo"], group=grpSess)
+
+grpRange = "Range / OTE"
+showRange = input.bool(true,  "Show 50% midpoint",          group=grpRange)
+showOTE   = input.bool(true,  "Show OTE band (62 / 79 %)",  group=grpRange)
+rangeBars = input.int(60,     "Lookback bars for range",    group=grpRange, minval=20)
+
+// ------------------------------------ HELPERS --------------------------------
+
+f_inSession(s) =>
+    not na(time(timeframe.period, s, sessTz))
+
+pipSize = syminfo.mintick * (syminfo.type == "forex" ? 10 : 1)
+eqTolPx = eqTolPips * pipSize
+
+atr14 = ta.atr(14)
+
+// ------------------------------------ SESSION SHADING ------------------------
+
+isAsia    = f_inSession(asiaSess)
+isLondon  = f_inSession(londonSess)
+isNY      = f_inSession(nySess)
+isLondonK = f_inSession(londonKZ)
+isNYAmK   = f_inSession(nyAmKZ)
+isNYPmK   = f_inSession(nyPmKZ)
+isLondonS = f_inSession(londonSB)
+isNYAmS   = f_inSession(nyAmSB)
+isNYPmS   = f_inSession(nyPmSB)
+
+bgcolor(showAsia    and isAsia    ? color.new(color.gray,   92) : na, title="Asia bg")
+bgcolor(showLondon  and isLondon  ? color.new(color.blue,   94) : na, title="London bg")
+bgcolor(showNY      and isNY      ? color.new(color.purple, 94) : na, title="NY bg")
+bgcolor(showKZ and (isLondonK or isNYAmK or isNYPmK) ? color.new(color.aqua, 88) : na, title="Kill zone bg")
+bgcolor(showSB and (isLondonS or isNYAmS or isNYPmS) ? color.new(color.yellow, 80) : na, title="Silver Bullet bg")
+
+// ------------------------------------ PIVOTS / STRUCTURE ---------------------
+
+ph = ta.pivothigh(high, pivLeft, pivRight)
+pl = ta.pivotlow (low,  pivLeft, pivRight)
+
+var float lastPH      = na
+var float lastPHprev  = na
+var int   lastPHbar   = na
+var float lastPL      = na
+var float lastPLprev  = na
+var int   lastPLbar   = na
+
+// store previous + current swing highs / lows
+if not na(ph)
+    lastPHprev := lastPH
+    lastPH     := ph
+    lastPHbar  := bar_index - pivRight
+if not na(pl)
+    lastPLprev := lastPL
+    lastPL     := pl
+    lastPLbar  := bar_index - pivRight
+
+// HH / HL / LH / LL labeling
+f_lblColor(isUp) => isUp ? color.new(color.green, 0) : color.new(color.red, 0)
+
+if showHHLL
+    if not na(ph) and not na(lastPHprev)
+        isHH = ph > lastPHprev
+        label.new(bar_index - pivRight, ph,
+             text = isHH ? "HH" : "LH",
+             color = color.new(color.gray, 90),
+             style = label.style_label_down,
+             textcolor = f_lblColor(isHH),
+             size = size.tiny)
+    if not na(pl) and not na(lastPLprev)
+        isHL = pl > lastPLprev
+        label.new(bar_index - pivRight, pl,
+             text = isHL ? "HL" : "LL",
+             color = color.new(color.gray, 90),
+             style = label.style_label_up,
+             textcolor = f_lblColor(isHL),
+             size = size.tiny)
+
+// ------------------------------------ BOS / CHoCH ----------------------------
+// Bias state: +1 bullish, -1 bearish, 0 unset
+var int bias = 0
+var float refHigh = na   // most recent valid swing high used for BOS detection up
+var float refLow  = na   // most recent valid swing low  used for BOS detection down
+
+if not na(ph)
+    refHigh := ph
+if not na(pl)
+    refLow := pl
+
+// Detect close beyond
+crossUp   = not na(refHigh) and close > refHigh and close[1] <= refHigh
+crossDown = not na(refLow ) and close < refLow  and close[1] >= refLow
+
+// BOS = close in same direction as bias
+// CHoCH = close opposite to bias  → bias flips
+if crossUp
+    if bias <= 0
+        // CHoCH up
+        if showBOS
+            line.new(bar_index - 1, refHigh, bar_index, refHigh,
+                 color=color.red, style=line.style_dotted, width=2)
+            label.new(bar_index, refHigh, "CHoCH↑",
+                 style=label.style_label_down,
+                 color=color.new(color.red, 70),
+                 textcolor=color.white, size=size.small)
+        bias := 1
+    else
+        // BOS up
+        if showBOS
+            line.new(bar_index - 1, refHigh, bar_index, refHigh,
+                 color=color.green, style=line.style_dotted, width=2)
+            label.new(bar_index, refHigh, "BOS↑",
+                 style=label.style_label_down,
+                 color=color.new(color.green, 70),
+                 textcolor=color.white, size=size.small)
+    refHigh := na  // consume
+
+if crossDown
+    if bias >= 0
+        if showBOS
+            line.new(bar_index - 1, refLow, bar_index, refLow,
+                 color=color.red, style=line.style_dotted, width=2)
+            label.new(bar_index, refLow, "CHoCH↓",
+                 style=label.style_label_up,
+                 color=color.new(color.red, 70),
+                 textcolor=color.white, size=size.small)
+        bias := -1
+    else
+        if showBOS
+            line.new(bar_index - 1, refLow, bar_index, refLow,
+                 color=color.green, style=line.style_dotted, width=2)
+            label.new(bar_index, refLow, "BOS↓",
+                 style=label.style_label_up,
+                 color=color.new(color.green, 70),
+                 textcolor=color.white, size=size.small)
+    refLow := na
+
+// ------------------------------------ ORDER BLOCKS ---------------------------
+// Bullish OB: last bearish candle before a strong up displacement
+// Bearish OB: last bullish candle before a strong down displacement
+
+var box[]   obBoxes  = array.new<box>()
+var int[]   obDir    = array.new<int>()    // +1 bull, -1 bear
+var bool[]  obIsBrk  = array.new<bool>()   // true if breaker
+
+f_pushOB(int dir, float top, float bot, int barL, int barR) =>
+    col = dir > 0 ? obBullCol : obBearCol
+    b = box.new(barL, top, barR, bot, border_color=color.new(color.gray, 50), bgcolor=col, extend=extend.right)
+    array.push(obBoxes, b)
+    array.push(obDir,   dir)
+    array.push(obIsBrk, false)
+    while array.size(obBoxes) > maxOBs
+        bx = array.shift(obBoxes)
+        box.delete(bx)
+        array.shift(obDir)
+        array.shift(obIsBrk)
+
+displacementUp   = close > high[1] and close - open > atr14 * 0.7
+displacementDown = open  - close > atr14 * 0.7 and close < low[1]
+
+if showOB and displacementUp
+    // bullish OB = high/low of the last bearish candle
+    if close[1] < open[1]
+        f_pushOB(1, high[1], low[1], bar_index - 1, bar_index + 10)
+if showOB and displacementDown
+    if close[1] > open[1]
+        f_pushOB(-1, high[1], low[1], bar_index - 1, bar_index + 10)
+
+// breaker conversion: when price closes through an OB, recolor it
+if array.size(obBoxes) > 0
+    for i = array.size(obBoxes) - 1 to 0
+        b   = array.get(obBoxes, i)
+        d   = array.get(obDir,   i)
+        brk = array.get(obIsBrk, i)
+        topPx = box.get_top(b)
+        botPx = box.get_bottom(b)
+        broken = (d > 0 and close < botPx) or (d < 0 and close > topPx)
+        if broken and not brk
+            box.set_bgcolor(b, brkCol)
+            box.set_border_color(b, color.new(color.orange, 30))
+            array.set(obIsBrk, i, true)
+
+// ------------------------------------ FAIR VALUE GAPS ------------------------
+// Bullish FVG: low[0] > high[2] (gap between candle 1 high and candle 3 low)
+// Bearish FVG: high[0] < low[2]
+
+var box[]   fvgBoxes = array.new<box>()
+var int[]   fvgDir   = array.new<int>()
+
+f_pushFVG(int dir, float top, float bot, int barL, int barR) =>
+    col = dir > 0 ? fvgBullCol : fvgBearCol
+    b = box.new(barL, top, barR, bot, border_color=color.new(color.gray, 60), bgcolor=col, extend=extend.right)
+    array.push(fvgBoxes, b)
+    array.push(fvgDir, dir)
+    while array.size(fvgBoxes) > maxFVGs
+        bx = array.shift(fvgBoxes)
+        box.delete(bx)
+        array.shift(fvgDir)
+
+bullFVG = low > high[2]
+bearFVG = high < low[2]
+fvgSizeOK(top, bot) => (top - bot) >= fvgMinPct * atr14
+
+if showFVG and bullFVG and fvgSizeOK(low, high[2])
+    f_pushFVG(1, low, high[2], bar_index - 2, bar_index + 10)
+if showFVG and bearFVG and fvgSizeOK(low[2], high)
+    f_pushFVG(-1, low[2], high, bar_index - 2, bar_index + 10)
+
+// FVG mitigation: shrink box to remaining unfilled portion
+if array.size(fvgBoxes) > 0
+    for i = array.size(fvgBoxes) - 1 to 0
+        b = array.get(fvgBoxes, i)
+        d = array.get(fvgDir, i)
+        topPx = box.get_top(b)
+        botPx = box.get_bottom(b)
+        if d > 0
+            if low <= topPx
+                newTop = math.min(topPx, low)
+                if newTop <= botPx
+                    box.delete(b)
+                    array.remove(fvgBoxes, i)
+                    array.remove(fvgDir, i)
+                else
+                    box.set_top(b, newTop)
+        else
+            if high >= botPx
+                newBot = math.max(botPx, high)
+                if newBot >= topPx
+                    box.delete(b)
+                    array.remove(fvgBoxes, i)
+                    array.remove(fvgDir, i)
+                else
+                    box.set_bottom(b, newBot)
+
+// ------------------------------------ EQUAL H/L + SWEEPS ---------------------
+
+eqHigh = not na(ph) and not na(lastPHprev) and math.abs(ph - lastPHprev) <= eqTolPx
+eqLow  = not na(pl) and not na(lastPLprev) and math.abs(pl - lastPLprev) <= eqTolPx
+
+if showEQ and eqHigh
+    line.new(lastPHbar, ph, bar_index - pivRight, ph,
+         color=color.new(color.aqua, 30), width=1, style=line.style_dashed)
+    label.new(bar_index - pivRight, ph, "EQH",
+         style=label.style_label_down, color=color.new(color.aqua, 80),
+         textcolor=color.aqua, size=size.tiny)
+if showEQ and eqLow
+    line.new(lastPLbar, pl, bar_index - pivRight, pl,
+         color=color.new(color.aqua, 30), width=1, style=line.style_dashed)
+    label.new(bar_index - pivRight, pl, "EQL",
+         style=label.style_label_up, color=color.new(color.aqua, 80),
+         textcolor=color.aqua, size=size.tiny)
+
+// Sweeps: candle wick takes lastPH/lastPL and closes back inside
+sweepBull = not na(lastPL) and low < lastPL and close > lastPL
+sweepBear = not na(lastPH) and high > lastPH and close < lastPH
+
+if showSweeps and sweepBull
+    label.new(bar_index, low, "🩸 SSL",
+         style=label.style_label_up,
+         color=color.new(color.red, 70),
+         textcolor=color.white, size=size.small)
+if showSweeps and sweepBear
+    label.new(bar_index, high, "🩸 BSL",
+         style=label.style_label_down,
+         color=color.new(color.red, 70),
+         textcolor=color.white, size=size.small)
+
+// ------------------------------------ PDH / PDL ------------------------------
+
+pdh = request.security(syminfo.tickerid, "D", high[1],  lookahead=barmerge.lookahead_off)
+pdl = request.security(syminfo.tickerid, "D", low[1],   lookahead=barmerge.lookahead_off)
+
+plot(showPdhPdl ? pdh : na, "PDH", color=color.new(color.aqua,  20), style=plot.style_circles, linewidth=1)
+plot(showPdhPdl ? pdl : na, "PDL", color=color.new(color.aqua,  20), style=plot.style_circles, linewidth=1)
+
+// ------------------------------------ RANGE / OTE ----------------------------
+
+rngHigh = ta.highest(high, rangeBars)
+rngLow  = ta.lowest(low,   rangeBars)
+mid     = (rngHigh + rngLow) / 2.0
+ote62   = bias > 0 ? rngHigh - 0.62 * (rngHigh - rngLow) : rngLow + 0.62 * (rngHigh - rngLow)
+ote79   = bias > 0 ? rngHigh - 0.79 * (rngHigh - rngLow) : rngLow + 0.79 * (rngHigh - rngLow)
+
+plot(showRange ? mid : na, "50% mid", color=color.new(color.yellow, 30), style=plot.style_line, linewidth=1)
+
+p1 = plot(showOTE ? ote62 : na, "OTE 62%", color=color.new(color.orange, 50))
+p2 = plot(showOTE ? ote79 : na, "OTE 79%", color=color.new(color.orange, 50))
+fill(p1, p2, color=showOTE ? color.new(color.orange, 90) : na, title="OTE band")
+
+// ------------------------------------ ALERTS ---------------------------------
+
+inKZ = isLondonK or isNYAmK or isNYPmK
+inSB = isLondonS or isNYAmS or isNYPmS
+
+// setup #1 — bullish: SSL sweep + bullish CHoCH in kill zone
+sweepCHoCHLong  = sweepBull and crossUp   and inKZ
+sweepCHoCHShort = sweepBear and crossDown and inKZ
+
+// setup #2 — bullish FVG inside Silver Bullet window
+sbFVGBull = bullFVG and inSB
+sbFVGBear = bearFVG and inSB
+
+// setup #4 — breaker tagged on this bar (any new breaker conversion)
+var bool brkLongTagged  = false
+var bool brkShortTagged = false
+brkLongTagged  := false
+brkShortTagged := false
+if array.size(obBoxes) > 0
+    for i = 0 to array.size(obBoxes) - 1
+        if array.get(obIsBrk, i)
+            d = array.get(obDir, i)
+            b = array.get(obBoxes, i)
+            top = box.get_top(b)
+            bot = box.get_bottom(b)
+            if d < 0 and high >= bot and low <= top
+                brkLongTagged := true   // bearish OB broken up → buy on tag
+            if d > 0 and high >= bot and low <= top
+                brkShortTagged := true
+
+alertcondition(sweepCHoCHLong,  "Sweep+CHoCH long",  "Liquidity sweep + bullish CHoCH in a kill zone — review setup #1.")
+alertcondition(sweepCHoCHShort, "Sweep+CHoCH short", "Liquidity sweep + bearish CHoCH in a kill zone — review setup #1.")
+alertcondition(sbFVGBull,       "SilverBullet FVG bull", "Bullish FVG formed inside a Silver Bullet window — setup #2 (long).")
+alertcondition(sbFVGBear,       "SilverBullet FVG bear", "Bearish FVG formed inside a Silver Bullet window — setup #2 (short).")
+alertcondition(brkLongTagged,   "Breaker tagged long",   "Failed bearish OB tagged from below — setup #4 (long).")
+alertcondition(brkShortTagged,  "Breaker tagged short",  "Failed bullish OB tagged from above — setup #4 (short).")
+alertcondition(crossUp,         "BOS / CHoCH up",        "Bullish structure break.")
+alertcondition(crossDown,       "BOS / CHoCH down",      "Bearish structure break.")
+
+// ------------------------------------ STATUS TABLE ---------------------------
+
+var table tbl = table.new(position.top_right, 2, 5, border_width=1)
+if barstate.islast
+    f_setRow(int r, string k, string v) =>
+        table.cell(tbl, 0, r, k, text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+        table.cell(tbl, 1, r, v, text_color=color.white, bgcolor=color.new(color.gray, 80), text_size=size.small)
+    biasStr = bias > 0 ? "BULLISH" : bias < 0 ? "BEARISH" : "—"
+    sessStr = isLondonS ? "LDN-SB" : isNYAmS ? "NYAM-SB" : isNYPmS ? "NYPM-SB" : isLondonK ? "LDN-KZ" : isNYAmK ? "NYAM-KZ" : isNYPmK ? "NYPM-KZ" : isAsia ? "ASIA" : isLondon ? "LONDON" : isNY ? "NY" : "—"
+    f_setRow(0, "Bias",      biasStr)
+    f_setRow(1, "Session",   sessStr)
+    f_setRow(2, "OBs",       str.tostring(array.size(obBoxes)))
+    f_setRow(3, "FVGs",      str.tostring(array.size(fvgBoxes)))
+    f_setRow(4, "ATR(14)",   str.tostring(atr14, format.mintick))

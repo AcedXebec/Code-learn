@@ -1,0 +1,205 @@
+//@version=5
+// =============================================================================
+//  PA + SMC/ICT Hybrid — Backtestable Strategy
+//
+//  Implements the two mechanizable setups from the guide:
+//
+//    Setup #1: Liquidity sweep + CHoCH + OB entry  (long & short)
+//    Setup #4: Breaker block + FVG mitigation      (long & short)
+//
+//  Setups #2 (Silver Bullet) and #3 (Power of 3) require judgment-based bias
+//  selection and are NOT implemented as strategies — only as alerts in the
+//  indicator file.
+//
+//  IMPORTANT: this is an educational reference. Do NOT trade it live without
+//  forward-testing on demo for at least one month.
+// =============================================================================
+
+strategy("PA SMC ICT Strategy", shorttitle="PA SMC Strat", overlay=true,
+     max_boxes_count=500, max_lines_count=500, max_labels_count=500,
+     calc_on_every_tick=false, calc_on_order_fills=false,
+     pyramiding=0, currency="USD", initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=0.5,
+     commission_type=strategy.commission.percent, commission_value=0.02,
+     slippage=2)
+
+// ------------------------------------ INPUTS ---------------------------------
+
+grpStr  = "Structure"
+pivLeft  = input.int(5, "Pivot left",  group=grpStr, minval=1)
+pivRight = input.int(5, "Pivot right", group=grpStr, minval=1)
+
+grpRisk = "Risk"
+riskPct = input.float(0.5, "Risk per trade (%)", group=grpRisk, step=0.1, minval=0.05, maxval=2)
+slBufferATR = input.float(1.0, "SL buffer (× ATR14)", group=grpRisk, step=0.1)
+rrTP1 = input.float(1.5, "TP1 R:R", group=grpRisk, step=0.1, minval=0.5)
+rrTP2 = input.float(3.0, "TP2 R:R", group=grpRisk, step=0.1, minval=1.0)
+tp1Frac = input.float(0.5, "Fraction off at TP1", group=grpRisk, step=0.1, minval=0.0, maxval=1.0)
+
+grpSetups = "Setups"
+useS1 = input.bool(true, "Setup #1: sweep + CHoCH + OB", group=grpSetups)
+useS4 = input.bool(true, "Setup #4: breaker + FVG",      group=grpSetups)
+
+grpFilter = "Time filters"
+useKZ = input.bool(true,  "Trade only in kill zones", group=grpFilter)
+londonKZ = input.session("0200-0500", "London KZ", group=grpFilter)
+nyAmKZ   = input.session("0700-1000", "NY AM KZ",  group=grpFilter)
+nyPmKZ   = input.session("1330-1600", "NY PM KZ",  group=grpFilter)
+sessTz   = input.string("America/New_York", "Timezone",
+     options=["America/New_York","Europe/London","UTC","Asia/Tokyo"], group=grpFilter)
+
+// ------------------------------------ HELPERS --------------------------------
+
+f_inSession(s) => not na(time(timeframe.period, s, sessTz))
+inKZ = (f_inSession(londonKZ) or f_inSession(nyAmKZ) or f_inSession(nyPmKZ))
+mayTrade = useKZ ? inKZ : true
+
+atr14 = ta.atr(14)
+
+// ------------------------------------ STRUCTURE / BIAS -----------------------
+
+ph = ta.pivothigh(high, pivLeft, pivRight)
+pl = ta.pivotlow (low,  pivLeft, pivRight)
+
+var float lastPH = na
+var float lastPHprev = na
+var float lastPL = na
+var float lastPLprev = na
+if not na(ph)
+    lastPHprev := lastPH
+    lastPH     := ph
+if not na(pl)
+    lastPLprev := lastPL
+    lastPL     := pl
+
+var int   bias    = 0
+var float refHigh = na
+var float refLow  = na
+if not na(ph)
+    refHigh := ph
+if not na(pl)
+    refLow  := pl
+
+crossUp   = not na(refHigh) and close > refHigh and close[1] <= refHigh
+crossDown = not na(refLow ) and close < refLow  and close[1] >= refLow
+
+if crossUp
+    bias := 1
+    refHigh := na
+if crossDown
+    bias := -1
+    refLow := na
+
+// ------------------------------------ SWEEPS / FVG / OB ----------------------
+
+sweepBull = not na(lastPL) and low  < lastPL and close > lastPL
+sweepBear = not na(lastPH) and high > lastPH and close < lastPH
+
+bullFVG = low > high[2]
+bearFVG = high < low[2]
+
+displacementUp   = close > high[1] and close - open > atr14 * 0.7
+displacementDown = open  - close > atr14 * 0.7 and close < low[1]
+
+// remember last bullish OB / bearish OB top/bot + breaker state
+var float bullOBtop = na
+var float bullOBbot = na
+var bool  bullOBbrk = false
+var float bearOBtop = na
+var float bearOBbot = na
+var bool  bearOBbrk = false
+
+if displacementUp and close[1] < open[1]
+    bullOBtop := high[1]
+    bullOBbot := low[1]
+    bullOBbrk := false
+if displacementDown and close[1] > open[1]
+    bearOBtop := high[1]
+    bearOBbot := low[1]
+    bearOBbrk := false
+
+// breaker flips
+if not na(bullOBbot) and close < bullOBbot and not bullOBbrk
+    bullOBbrk := true
+if not na(bearOBtop) and close > bearOBtop and not bearOBbrk
+    bearOBbrk := true
+
+// ------------------------------------ ENTRY LOGIC ---------------------------
+// Setup #1 long: sweep SSL, then close above the bullish OB top after CHoCH up
+// Setup #1 short: mirror
+
+s1Long  = useS1 and mayTrade and bias == 1 and sweepBull and crossUp and not na(bullOBtop)
+s1Short = useS1 and mayTrade and bias == -1 and sweepBear and crossDown and not na(bearOBbot)
+
+// Setup #4 long: bearish OB became breaker, price taps it back from below + bull FVG
+s4Long  = useS4 and mayTrade and bearOBbrk and not na(bearOBtop) and high >= bearOBbot and low <= bearOBtop and bullFVG
+s4Short = useS4 and mayTrade and bullOBbrk and not na(bullOBbot) and high >= bullOBbot and low <= bullOBtop and bearFVG
+
+// ------------------------------------ EXECUTION -----------------------------
+// Stops and TPs
+slPipBuffer = atr14 * slBufferATR
+
+if s1Long and strategy.position_size == 0
+    slPx = math.min(low, low[1]) - slPipBuffer
+    riskPx = close - slPx
+    if riskPx > 0
+        tp1 = close + riskPx * rrTP1
+        tp2 = close + riskPx * rrTP2
+        strategy.entry("S1L", strategy.long, comment="S1 long")
+        strategy.exit("TP1L", "S1L", limit=tp1, qty_percent=tp1Frac * 100, stop=slPx)
+        strategy.exit("TP2L", "S1L", limit=tp2, stop=slPx)
+
+if s1Short and strategy.position_size == 0
+    slPx = math.max(high, high[1]) + slPipBuffer
+    riskPx = slPx - close
+    if riskPx > 0
+        tp1 = close - riskPx * rrTP1
+        tp2 = close - riskPx * rrTP2
+        strategy.entry("S1S", strategy.short, comment="S1 short")
+        strategy.exit("TP1S", "S1S", limit=tp1, qty_percent=tp1Frac * 100, stop=slPx)
+        strategy.exit("TP2S", "S1S", limit=tp2, stop=slPx)
+
+if s4Long and strategy.position_size == 0
+    slPx = bearOBtop + slPipBuffer
+    riskPx = slPx - close
+    if riskPx > 0
+        // setup #4 long enters with the breaker rejecting up; reverse logic
+        // (we are buying because the failed bearish OB now flipped bullish)
+        // SL above breaker; TPs below would be wrong — use opposite: target up
+        tp1 = close + riskPx * rrTP1
+        tp2 = close + riskPx * rrTP2
+        // re-derive SL: should be ABOVE breaker for SHORT, but we're going long
+        slLong = bearOBbot - slPipBuffer
+        riskLong = close - slLong
+        if riskLong > 0
+            tp1L = close + riskLong * rrTP1
+            tp2L = close + riskLong * rrTP2
+            strategy.entry("S4L", strategy.long, comment="S4 long")
+            strategy.exit("TP1L4", "S4L", limit=tp1L, qty_percent=tp1Frac * 100, stop=slLong)
+            strategy.exit("TP2L4", "S4L", limit=tp2L, stop=slLong)
+
+if s4Short and strategy.position_size == 0
+    slShort = bullOBtop + slPipBuffer
+    riskShort = slShort - close
+    if riskShort > 0
+        tp1S = close - riskShort * rrTP1
+        tp2S = close - riskShort * rrTP2
+        strategy.entry("S4S", strategy.short, comment="S4 short")
+        strategy.exit("TP1S4", "S4S", limit=tp1S, qty_percent=tp1Frac * 100, stop=slShort)
+        strategy.exit("TP2S4", "S4S", limit=tp2S, stop=slShort)
+
+// ------------------------------------ VISUALIZATION (light) ------------------
+
+plotshape(s1Long,  title="S1 long",  style=shape.triangleup,   location=location.belowbar, color=color.green,  size=size.small)
+plotshape(s1Short, title="S1 short", style=shape.triangledown, location=location.abovebar, color=color.red,    size=size.small)
+plotshape(s4Long,  title="S4 long",  style=shape.diamond,      location=location.belowbar, color=color.lime,   size=size.small)
+plotshape(s4Short, title="S4 short", style=shape.diamond,      location=location.abovebar, color=color.fuchsia,size=size.small)
+
+bgcolor(mayTrade ? na : color.new(color.gray, 92), title="Outside KZ")
+
+// ------------------------------------ ALERTS ---------------------------------
+
+alertcondition(s1Long,  "S1 long entry",  "Sweep + CHoCH + bullish OB in kill zone — long entry.")
+alertcondition(s1Short, "S1 short entry", "Sweep + CHoCH + bearish OB in kill zone — short entry.")
+alertcondition(s4Long,  "S4 long entry",  "Breaker tagged + bull FVG — setup #4 long entry.")
+alertcondition(s4Short, "S4 short entry", "Breaker tagged + bear FVG — setup #4 short entry.")

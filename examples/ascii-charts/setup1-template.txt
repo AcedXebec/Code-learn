@@ -1,0 +1,53 @@
+Setup #1 — Liquidity sweep + CHoCH + OB entry — bullish template
+
+
+    Time →
+    ──────────────────────────────────────────────────────────────────
+
+
+                                                            TP2  ╳ ─── PDH
+                                                              ╱       (major BSL)
+                                                            ╱
+                                                          ╱
+                                                        ╱
+                                                      ╱   TP1 ╳ ─── EQH/Asia high
+                                                    ╱           ╱   (minor BSL)
+                                                  ╱           ╱
+                                                ╱           ╱
+                                              ╱           ╱
+                                            ╱           ╱
+                                  ┌────────────────────────────────┐
+                                  │           OB BOX  (bull)        │
+                                  │  enter on retest of TOP edge    │
+                                  └────────────────────────────────┘
+                                            ↑
+                                            │ ★ M5 CHoCH↑
+                                            │   (close above last LH)
+                                            │
+                          ╱╲ ╱╲      ╱╲   ╱
+                        ╱     ╲     ╱  ╲ ╱
+                      ╱        ╲   ╱    ╳   ★ wick takes SSL & closes back
+                    ╱            ╲ ╱       (this is the SWEEP candle)
+                                  ╳ ──────  ◀══ SL anchor: sweep low − ATR
+   ────────────────────── EQL / Asia low / PDL ──────────────────────  ◀══ liquidity pool
+                                                                          (SSL)
+
+
+   Notation:
+     ╱   ╲   = candle bodies (you draw these in your head)
+     ╳       = candle wick / extreme
+     EQL     = equal lows
+     SSL     = sell-side liquidity (stops below)
+     BSL     = buy-side liquidity (stops above)
+     OB      = order block
+     CHoCH↑  = first close above last LH after a downtrend
+     SL      = stop loss
+     TP1/TP2 = take profit 1 / 2
+
+   Mirror everything for SHORTS:
+     SSL pool  → BSL pool
+     bull OB   → bear OB
+     CHoCH↑    → CHoCH↓
+     entry on retest from above instead of below
+
+   Read 05-setup-liquidity-choch-ob.md for the playbook.

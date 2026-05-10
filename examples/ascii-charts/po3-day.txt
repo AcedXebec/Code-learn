@@ -1,0 +1,48 @@
+Bullish Power-of-3 (AMD) day template
+
+
+      Asia (19:00→02:00 NY)            London open       NY session
+   ─────────────────────────────  ───────────────────  ──────────────────────────
+
+
+           ╱╲                                                              TP2 ╳ ─── PDH / weekly H
+         ╱    ╲                                                              ╱
+       ╱        ╲                                                          ╱
+     ╱   tight    ╲                                                      ╱   TP1 ╳ ─── Asia high (BSL)
+   ╱   range A    ╲                                                    ╱           ╱
+                    ╲ ╱╲                                              ╱           ╱
+   ─── Asia high ─────╳ ────────────────────────────────────────────╱           ╱   ◀══ swept later (TP1)
+                       ╲ ╱╲                                       ╱           ╱
+                         ╳   ╲ ╱                                ╱            ╱
+                              ╳ ╱╲                            ╱            ╱
+   ─── Asia low ──────────────╲ ╲   ╲                       ╱            ╱
+                                ╲   ╲    ╱╲       ★ M5    ╱            ╱
+                                  ╲   ╲╱    ╲    CHoCH↑ ╱            ╱
+                                    ╳         ╲       ╱           ╱        D — sustained
+                                    │           ╲    ╱          ╱           bullish push
+                                    │             ╲ ╱         ╱             across the
+                                    │               ╳       ╱               whole NY session
+                                    │              entry  ╱
+                                    ★ M (Judas)         ╱
+                                    wick BELOW         ╱  bullish OB tagged
+                                    Asia low,        ╱
+                                    closes back     ╱
+                                    inside range
+   ────────── PDL / SSL pool ──────────────────  ◀══ SL anchor: a few pips below Judas low
+
+
+   Daily candle that forms by 16:00 NY:
+
+         ┌──┐
+         │██│   (long bullish body — the Distribution leg)
+         │██│
+         │██│
+         ├──┤
+         │  │
+         │  │   (lower wick — the Manipulation / Judas)
+         │  │
+         ▼
+
+   Mirror for BEARISH PO3 days: Judas wicks ABOVE Asia high, NY drives DOWN.
+
+   See 07-setup-power-of-3.md for the full rules.
